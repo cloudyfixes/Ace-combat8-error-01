@@ -1,0 +1,226 @@
+package tcp
+
+import (
+	"crypto/tls"
+	"time"
+
+	ctls "github.com/dobyte/due/v2/core/tls"
+	"github.com/dobyte/due/v2/etc"
+	"github.com/dobyte/due/v2/log"
+	"github.com/dobyte/due/v2/utils/xconv"
+)
+
+const (
+	defaultClientAddr              = "127.0.0.1:3553"
+	defaultClientDialTimeout       = "3s"
+	defaultClientReadBufferSize    = 4096
+	defaultClientWriteTimeout      = "0s"
+	defaultClientWriteQueueSize    = 1024
+	defaultClientHeartbeatInterval = "10s"
+	defaultClientCloseTimeout      = "0s"
+)
+
+const (
+	defaultClientAddrKey              = "etc.network.tcp.client.addr"
+	defaultClientCAFileKey            = "etc.network.tcp.client.caFile"
+	defaultClientServerNameKey        = "etc.network.tcp.client.serverName"
+	defaultClientDialTimeoutKey       = "etc.network.tcp.client.dialTimeout"
+	defaultClientReadBufferSizeKey    = "etc.network.tcp.client.readBufferSize"
+	defaultClientWriteTimeoutKey      = "etc.network.tcp.client.writeTimeout"
+	defaultClientWriteQueueSizeKey    = "etc.network.tcp.client.writeQueueSize"
+	defaultClientHeartbeatIntervalKey = "etc.network.tcp.client.heartbeatInterval"
+	defaultClientCloseTimeoutKey      = "etc.network.tcp.client.closeTimeout"
+)
+
+type ClientOption func(o *clientOptions)
+
+type clientOptions struct {
+	addr              string        // 地址
+	tlsConfig         *tls.Config   // TLS配置
+	dialTimeout       time.Duration // 拨号超时时间，默认3s
+	readBufferSize    int           // 读取缓冲区大小，默认4096
+	writeTimeout      time.Duration // 写超时时间，默认无超时
+	writeQueueSize    int           // 写队列大小，默认1024
+	heartbeatInterval time.Duration // 心跳间隔时间，默认10s
+	closeTimeout      time.Duration // 优雅关闭超时时间，默认0s，不限制
+}
+
+// defaultClientOptions 创建默认客户端配置
+// @return @1 *clientOptions 客户端配置
+func defaultClientOptions() *clientOptions {
+	opts := &clientOptions{}
+
+	if addr := etc.Get(defaultClientAddrKey, defaultClientAddr).String(); addr != "" {
+		opts.addr = addr
+	} else {
+		opts.addr = defaultClientAddr
+	}
+
+	if dialTimeout := etc.Get(defaultClientDialTimeoutKey, defaultClientDialTimeout).Duration(); dialTimeout > 0 {
+		opts.dialTimeout = dialTimeout
+	} else {
+		opts.dialTimeout = xconv.Duration(defaultClientDialTimeout)
+	}
+
+	if readBufferSize := etc.Get(defaultClientReadBufferSizeKey, defaultClientReadBufferSize).Int(); readBufferSize > 0 {
+		opts.readBufferSize = readBufferSize
+	} else {
+		opts.readBufferSize = defaultClientReadBufferSize
+	}
+
+	if writeTimeout := etc.Get(defaultClientWriteTimeoutKey, defaultClientWriteTimeout).Duration(); writeTimeout >= 0 {
+		opts.writeTimeout = writeTimeout
+	} else {
+		opts.writeTimeout = xconv.Duration(defaultClientWriteTimeout)
+	}
+
+	if writeQueueSize := etc.Get(defaultClientWriteQueueSizeKey, defaultClientWriteQueueSize).Int(); writeQueueSize > 0 {
+		opts.writeQueueSize = writeQueueSize
+	} else {
+		opts.writeQueueSize = defaultClientWriteQueueSize
+	}
+
+	if heartbeatInterval := etc.Get(defaultClientHeartbeatIntervalKey, defaultClientHeartbeatInterval).Duration(); heartbeatInterval >= 0 {
+		opts.heartbeatInterval = heartbeatInterval
+	} else {
+		opts.heartbeatInterval = xconv.Duration(defaultClientHeartbeatInterval)
+	}
+
+	if closeTimeout := etc.Get(defaultClientCloseTimeoutKey, defaultClientCloseTimeout).Duration(); closeTimeout >= 0 {
+		opts.closeTimeout = closeTimeout
+	} else {
+		opts.closeTimeout = xconv.Duration(defaultClientCloseTimeout)
+	}
+
+	caFile := etc.Get(defaultClientCAFileKey).String()
+	serverName := etc.Get(defaultClientServerNameKey).String()
+
+	if caFile != "" || serverName != "" {
+		if config, err := ctls.MakeTCPClientTLSConfig(caFile, serverName); err != nil {
+			log.Warnf("make tcp client tls config failed: %v", err)
+		} else {
+			opts.tlsConfig = config
+		}
+	}
+
+	return opts
+}
+
+// WithClientAddr 设置拨号地址
+// @param addr string 拨号地址
+// @return @1 ClientOption 客户端配置项
+func WithClientAddr(addr string) ClientOption {
+	return func(o *clientOptions) {
+		if addr != "" {
+			o.addr = addr
+		} else {
+			log.Warnf("the specified addr is empty and will be ignored")
+		}
+	}
+}
+
+// WithClientCredentials 设置CA证书和校验域名
+// @param caFile string CA证书文件
+// @param serverName string 服务器名称
+// @return @1 ClientOption 客户端配置项
+func WithClientCredentials(caFile string, serverName string) ClientOption {
+	return func(o *clientOptions) {
+		if caFile != "" || serverName != "" {
+			if config, err := ctls.MakeTCPClientTLSConfig(caFile, serverName); err != nil {
+				log.Warnf("make tcp client tls config failed: %v", err)
+			} else {
+				o.tlsConfig = config
+			}
+		} else {
+			log.Warnf("the specified caFile or serverName is empty and will be ignored")
+		}
+	}
+}
+
+// WithClientTLSConfig 设置TLS配置
+// @param tlsConfig *tls.Config TLS配置
+// @return @1 ClientOption 客户端配置项
+func WithClientTLSConfig(tlsConfig *tls.Config) ClientOption {
+	return func(o *clientOptions) {
+		o.tlsConfig = tlsConfig
+	}
+}
+
+// WithClientDialTimeout 设置拨号超时时间
+// @param dialTimeout time.Duration 拨号超时时间
+// @return @1 ClientOption 客户端配置项
+func WithClientDialTimeout(dialTimeout time.Duration) ClientOption {
+	return func(o *clientOptions) {
+		if dialTimeout >= 0 {
+			o.dialTimeout = dialTimeout
+		} else {
+			log.Warnf("the specified dialTimeout is less than zero and will be ignored")
+		}
+	}
+}
+
+// WithClientReadBufferSize 设置读取缓冲区大小
+// @param readBufferSize int 读取缓冲区大小
+// @return @1 ClientOption 客户端配置项
+func WithClientReadBufferSize(readBufferSize int) ClientOption {
+	return func(o *clientOptions) {
+		if readBufferSize > 0 {
+			o.readBufferSize = readBufferSize
+		} else {
+			log.Warnf("the specified readBufferSize is less than zero and will be ignored")
+		}
+	}
+}
+
+// WithClientWriteTimeout 设置写超时时间
+// @param writeTimeout time.Duration 写超时时间
+// @return @1 ClientOption 客户端配置项
+func WithClientWriteTimeout(writeTimeout time.Duration) ClientOption {
+	return func(o *clientOptions) {
+		if writeTimeout >= 0 {
+			o.writeTimeout = writeTimeout
+		} else {
+			log.Warnf("the specified writeTimeout is less than zero and will be ignored")
+		}
+	}
+}
+
+// WithClientWriteQueueSize 设置写队列大小
+// @param writeQueueSize int 写队列大小
+// @return @1 ClientOption 客户端配置项
+func WithClientWriteQueueSize(writeQueueSize int) ClientOption {
+	return func(o *clientOptions) {
+		if writeQueueSize > 0 {
+			o.writeQueueSize = writeQueueSize
+		} else {
+			log.Warnf("the specified writeQueueSize is less than zero and will be ignored")
+		}
+	}
+}
+
+// WithClientHeartbeatInterval 设置心跳间隔时间
+// @param heartbeatInterval time.Duration 心跳间隔时间
+// @return @1 ClientOption 客户端配置项
+func WithClientHeartbeatInterval(heartbeatInterval time.Duration) ClientOption {
+	return func(o *clientOptions) {
+		if heartbeatInterval >= 0 {
+			o.heartbeatInterval = heartbeatInterval
+		} else {
+			log.Warnf("the specified heartbeatInterval is less than zero and will be ignored")
+		}
+	}
+}
+
+// WithClientCloseTimeout 设置优雅关闭超时时间
+// 超时后未排空的写队列将放弃等待并强制关闭连接，默认为0表示不限制
+// @param closeTimeout time.Duration 优雅关闭超时时间
+// @return @1 ClientOption 客户端配置项
+func WithClientCloseTimeout(closeTimeout time.Duration) ClientOption {
+	return func(o *clientOptions) {
+		if closeTimeout >= 0 {
+			o.closeTimeout = closeTimeout
+		} else {
+			log.Warnf("the specified closeTimeout is less than zero and will be ignored")
+		}
+	}
+}

@@ -1,0 +1,260 @@
+package ws
+
+import (
+	"crypto/tls"
+	"time"
+
+	ctls "github.com/dobyte/due/v2/core/tls"
+	"github.com/dobyte/due/v2/etc"
+	"github.com/dobyte/due/v2/log"
+	"github.com/dobyte/due/v2/utils/xconv"
+)
+
+const (
+	defaultClientUrl               = "ws://127.0.0.1:3553"
+	defaultClientDialTimeout       = "3s"
+	defaultClientReadBufferSize    = 4096
+	defaultClientWriteTimeout      = "0s"
+	defaultClientWriteQueueSize    = 1024
+	defaultClientHeartbeatInterval = "10s"
+	defaultClientCloseTimeout      = "0s"
+	defaultClientEnableCompression = false
+	defaultClientCompressionLevel  = 1
+)
+
+const (
+	defaultClientUrlKey               = "etc.network.ws.client.url"
+	defaultClientCAFileKey            = "etc.network.ws.client.caFile"
+	defaultClientServerNameKey        = "etc.network.ws.client.serverName"
+	defaultClientDialTimeoutKey       = "etc.network.ws.client.dialTimeout"
+	defaultClientReadBufferSizeKey    = "etc.network.ws.client.readBufferSize"
+	defaultClientWriteTimeoutKey      = "etc.network.ws.client.writeTimeout"
+	defaultClientWriteQueueSizeKey    = "etc.network.ws.client.writeQueueSize"
+	defaultClientHeartbeatIntervalKey = "etc.network.ws.client.heartbeatInterval"
+	defaultClientCloseTimeoutKey      = "etc.network.ws.client.closeTimeout"
+	defaultClientEnableCompressionKey = "etc.network.ws.client.enableCompression"
+	defaultClientCompressionLevelKey  = "etc.network.ws.client.compressionLevel"
+)
+
+type ClientOption func(o *clientOptions)
+
+type clientOptions struct {
+	url               string        // 拨号地址
+	tlsConfig         *tls.Config   // TLS配置
+	dialTimeout       time.Duration // 拨号超时时间，默认3s
+	readBufferSize    int           // 读缓冲区大小，默认4096
+	writeTimeout      time.Duration // 写入超时时间，默认无超时
+	writeQueueSize    int           // 写入队列大小，默认1024
+	heartbeatInterval time.Duration // 心跳间隔时间，默认10s
+	closeTimeout      time.Duration // 优雅关闭超时时间，默认0s，不限制
+	enableCompression bool          // 是否开启压缩，默认false
+	compressionLevel  int           // 压缩等级，默认1
+}
+
+// defaultClientOptions 构建默认客户端配置
+// 优先读取环境配置（etc.network.ws.client.*），缺失时回退到内置默认值
+// @return @1 *clientOptions 客户端配置
+func defaultClientOptions() *clientOptions {
+	opts := &clientOptions{}
+	opts.enableCompression = etc.Get(defaultClientEnableCompressionKey, defaultClientEnableCompression).Bool()
+
+	if url := etc.Get(defaultClientUrlKey, defaultClientUrl).String(); url != "" {
+		opts.url = url
+	} else {
+		opts.url = defaultClientUrl
+	}
+
+	if dialTimeout := etc.Get(defaultClientDialTimeoutKey, defaultClientDialTimeout).Duration(); dialTimeout > 0 {
+		opts.dialTimeout = dialTimeout
+	} else {
+		opts.dialTimeout = xconv.Duration(defaultClientDialTimeout)
+	}
+
+	if readBufferSize := etc.Get(defaultClientReadBufferSizeKey, defaultClientReadBufferSize).Int(); readBufferSize > 0 {
+		opts.readBufferSize = readBufferSize
+	} else {
+		opts.readBufferSize = defaultClientReadBufferSize
+	}
+
+	if writeTimeout := etc.Get(defaultClientWriteTimeoutKey, defaultClientWriteTimeout).Duration(); writeTimeout >= 0 {
+		opts.writeTimeout = writeTimeout
+	} else {
+		opts.writeTimeout = xconv.Duration(defaultClientWriteTimeout)
+	}
+
+	if writeQueueSize := etc.Get(defaultClientWriteQueueSizeKey, defaultClientWriteQueueSize).Int(); writeQueueSize > 0 {
+		opts.writeQueueSize = writeQueueSize
+	} else {
+		opts.writeQueueSize = defaultClientWriteQueueSize
+	}
+
+	if heartbeatInterval := etc.Get(defaultClientHeartbeatIntervalKey, defaultClientHeartbeatInterval).Duration(); heartbeatInterval >= 0 {
+		opts.heartbeatInterval = heartbeatInterval
+	} else {
+		opts.heartbeatInterval = xconv.Duration(defaultClientHeartbeatInterval)
+	}
+
+	if closeTimeout := etc.Get(defaultClientCloseTimeoutKey, defaultClientCloseTimeout).Duration(); closeTimeout >= 0 {
+		opts.closeTimeout = closeTimeout
+	} else {
+		opts.closeTimeout = xconv.Duration(defaultClientCloseTimeout)
+	}
+
+	if compressionLevel := etc.Get(defaultClientCompressionLevelKey, defaultClientCompressionLevel).Int(); compressionLevel >= 1 && compressionLevel <= 9 {
+		opts.compressionLevel = compressionLevel
+	} else {
+		opts.compressionLevel = defaultClientCompressionLevel
+	}
+
+	caFile := etc.Get(defaultClientCAFileKey).String()
+	serverName := etc.Get(defaultClientServerNameKey).String()
+
+	if caFile != "" || serverName != "" {
+		if config, err := ctls.MakeTCPClientTLSConfig(caFile, serverName); err != nil {
+			log.Warnf("make ws client tls config failed: %v", err)
+		} else {
+			opts.tlsConfig = config
+		}
+	}
+
+	return opts
+}
+
+// WithClientUrl 设置拨号链接
+// @param url string 拨号地址
+// @return @1 ClientOption 客户端配置项
+func WithClientUrl(url string) ClientOption {
+	return func(o *clientOptions) {
+		if url != "" {
+			o.url = url
+		} else {
+			log.Warnf("the specified url is empty and will be ignored")
+		}
+	}
+}
+
+// WithClientCredentials 设置CA证书和校验域名
+// @param caFile string CA证书文件
+// @param serverName string 服务器名称
+// @return @1 ClientOption 客户端配置项
+func WithClientCredentials(caFile string, serverName string) ClientOption {
+	return func(o *clientOptions) {
+		if caFile != "" || serverName != "" {
+			if config, err := ctls.MakeTCPClientTLSConfig(caFile, serverName); err != nil {
+				log.Warnf("make ws client tls config failed: %v", err)
+			} else {
+				o.tlsConfig = config
+			}
+		} else {
+			log.Warnf("the specified caFile or serverName is empty and will be ignored")
+		}
+	}
+}
+
+// WithClientTLSConfig 设置TLS配置
+// @param tlsConfig *tls.Config TLS配置
+// @return @1 ClientOption 客户端配置项
+func WithClientTLSConfig(tlsConfig *tls.Config) ClientOption {
+	return func(o *clientOptions) {
+		o.tlsConfig = tlsConfig
+	}
+}
+
+// WithClientDialTimeout 设置拨号超时时间
+// @param dialTimeout time.Duration 拨号超时时间
+// @return @1 ClientOption 客户端配置项
+func WithClientDialTimeout(dialTimeout time.Duration) ClientOption {
+	return func(o *clientOptions) {
+		if dialTimeout >= 0 {
+			o.dialTimeout = dialTimeout
+		} else {
+			log.Warnf("the specified dialTimeout is less than zero and will be ignored")
+		}
+	}
+}
+
+// WithClientReadBufferSize 设置读缓冲区大小
+// @param readBufferSize int 读缓冲区大小
+// @return @1 ClientOption 客户端配置项
+func WithClientReadBufferSize(readBufferSize int) ClientOption {
+	return func(o *clientOptions) {
+		if readBufferSize > 0 {
+			o.readBufferSize = readBufferSize
+		} else {
+			log.Warnf("the specified readBufferSize is less than zero and will be ignored")
+		}
+	}
+}
+
+// WithClientWriteTimeout 设置写超时时间
+// @param writeTimeout time.Duration 写超时时间
+// @return @1 ClientOption 客户端配置项
+func WithClientWriteTimeout(writeTimeout time.Duration) ClientOption {
+	return func(o *clientOptions) {
+		if writeTimeout >= 0 {
+			o.writeTimeout = writeTimeout
+		} else {
+			log.Warnf("the specified writeTimeout is less than zero and will be ignored")
+		}
+	}
+}
+
+// WithClientWriteQueueSize 设置写队列大小
+// @param writeQueueSize int 写队列大小
+// @return @1 ClientOption 客户端配置项
+func WithClientWriteQueueSize(writeQueueSize int) ClientOption {
+	return func(o *clientOptions) {
+		if writeQueueSize > 0 {
+			o.writeQueueSize = writeQueueSize
+		} else {
+			log.Warnf("the specified writeQueueSize is less than zero and will be ignored")
+		}
+	}
+}
+
+// WithClientHeartbeatInterval 设置心跳间隔时间
+// @param heartbeatInterval time.Duration 心跳间隔时间
+// @return @1 ClientOption 客户端配置项
+func WithClientHeartbeatInterval(heartbeatInterval time.Duration) ClientOption {
+	return func(o *clientOptions) {
+		if heartbeatInterval >= 0 {
+			o.heartbeatInterval = heartbeatInterval
+		} else {
+			log.Warnf("the specified heartbeatInterval is less than zero and will be ignored")
+		}
+	}
+}
+
+// WithClientCloseTimeout 设置优雅关闭超时时间
+// 超时后未排空的写队列将放弃等待并强制关闭连接，默认为0表示不限制
+// @param closeTimeout time.Duration 优雅关闭超时时间
+// @return @1 ClientOption 客户端配置项
+func WithClientCloseTimeout(closeTimeout time.Duration) ClientOption {
+	return func(o *clientOptions) {
+		if closeTimeout >= 0 {
+			o.closeTimeout = closeTimeout
+		} else {
+			log.Warnf("the specified closeTimeout is less than zero and will be ignored")
+		}
+	}
+}
+
+// WithClientCompression 设置是否开启压缩
+// @param enableCompression bool 是否开启压缩
+// @return @1 ClientOption 客户端配置项
+func WithClientCompression(enableCompression bool) ClientOption {
+	return func(o *clientOptions) { o.enableCompression = enableCompression }
+}
+
+// WithClientCompressionLevel 设置压缩等级
+// @param compressionLevel int 压缩等级
+// @return @1 ClientOption 客户端配置项
+func WithClientCompressionLevel(compressionLevel int) ClientOption {
+	return func(o *clientOptions) {
+		if compressionLevel >= 1 && compressionLevel <= 9 {
+			o.compressionLevel = compressionLevel
+		} else {
+			log.Warnf("the specified compressionLevel is out of range and will be ignored")
+		}
+	}
+}

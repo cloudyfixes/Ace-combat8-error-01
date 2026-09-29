@@ -1,0 +1,266 @@
+package tcp
+
+import (
+	"time"
+
+	"github.com/dobyte/due/v2/etc"
+	"github.com/dobyte/due/v2/log"
+	"github.com/dobyte/due/v2/utils/xconv"
+)
+
+const (
+	defaultServerAddr               = ":3553"
+	defaultServerMaxConnNum         = 5000
+	defaultServerReadBufferSize     = 4096
+	defaultServerWriteTimeout       = "0s"
+	defaultServerWriteQueueSize     = 1024
+	defaultServerHeartbeatInterval  = "10s"
+	defaultServerHeartbeatMechanism = "resp"
+	defaultServerAuthorizeTimeout   = "0s"
+	defaultServerCloseTimeout       = "0s"
+)
+
+const (
+	defaultServerAddrKey                = "etc.network.tcp.server.addr"
+	defaultServerCertFileKey            = "etc.network.tcp.server.certFile"
+	defaultServerKeyFileKey             = "etc.network.tcp.server.keyFile"
+	defaultServerMaxConnNumKey          = "etc.network.tcp.server.maxConnNum"
+	defaultServerReadBufferSizeKey      = "etc.network.tcp.server.readBufferSize"
+	defaultServerWriteTimeoutKey        = "etc.network.tcp.server.writeTimeout"
+	defaultServerWriteQueueSizeKey      = "etc.network.tcp.server.writeQueueSize"
+	defaultServerHeartbeatIntervalKey   = "etc.network.tcp.server.heartbeatInterval"
+	defaultServerHeartbeatMechanismKey  = "etc.network.tcp.server.heartbeatMechanism"
+	defaultServerAuthorizeTimeoutKey    = "etc.network.tcp.server.authorizeTimeout"
+	defaultServerCloseTimeoutKey        = "etc.network.tcp.server.closeTimeout"
+	defaultServerEnableProxyProtocolKey = "etc.network.tcp.server.enableProxyProtocol"
+)
+
+const (
+	RespHeartbeat HeartbeatMechanism = "resp" // 响应式心跳
+	TickHeartbeat HeartbeatMechanism = "tick" // 主动定时心跳
+)
+
+type HeartbeatMechanism string
+
+type ServerOption func(o *serverOptions)
+
+type serverOptions struct {
+	addr                string             // 监听地址，默认0.0.0.0:3553
+	certFile            string             // 证书文件
+	keyFile             string             // 秘钥文件
+	maxConnNum          int                // 最大连接数，默认5000
+	readBufferSize      int                // 读取缓冲区大小，默认4096
+	writeTimeout        time.Duration      // 写超时时间，默认无超时
+	writeQueueSize      int                // 写队列大小，默认1024
+	heartbeatInterval   time.Duration      // 心跳检测间隔时间，默认10s
+	heartbeatMechanism  HeartbeatMechanism // 心跳机制，默认resp
+	authorizeTimeout    time.Duration      // 授权超时时间，默认0s，不检测
+	closeTimeout        time.Duration      // 优雅关闭超时时间，默认0s，不限制
+	enableProxyProtocol bool               // 是否启用ProxyProtocol，默认false
+}
+
+// defaultServerOptions 构建默认服务器配置
+// 优先读取环境配置（etc.network.tcp.server.*），缺失时回退到内置默认值
+// @return @1 *serverOptions 服务器配置
+func defaultServerOptions() *serverOptions {
+	opts := &serverOptions{}
+	opts.certFile = etc.Get(defaultServerCertFileKey).String()
+	opts.keyFile = etc.Get(defaultServerKeyFileKey).String()
+	opts.enableProxyProtocol = etc.Get(defaultServerEnableProxyProtocolKey).Bool()
+
+	if addr := etc.Get(defaultServerAddrKey, defaultServerAddr).String(); addr != "" {
+		opts.addr = addr
+	} else {
+		opts.addr = defaultServerAddr
+	}
+
+	if maxConnNum := etc.Get(defaultServerMaxConnNumKey, defaultServerMaxConnNum).Int(); maxConnNum > 0 {
+		opts.maxConnNum = maxConnNum
+	} else {
+		opts.maxConnNum = defaultServerMaxConnNum
+	}
+
+	if readBufferSize := etc.Get(defaultServerReadBufferSizeKey, defaultServerReadBufferSize).Int(); readBufferSize > 0 {
+		opts.readBufferSize = readBufferSize
+	} else {
+		opts.readBufferSize = defaultServerReadBufferSize
+	}
+
+	if writeTimeout := etc.Get(defaultServerWriteTimeoutKey, defaultServerWriteTimeout).Duration(); writeTimeout >= 0 {
+		opts.writeTimeout = writeTimeout
+	} else {
+		opts.writeTimeout = xconv.Duration(defaultServerWriteTimeout)
+	}
+
+	if writeQueueSize := etc.Get(defaultServerWriteQueueSizeKey, defaultServerWriteQueueSize).Int(); writeQueueSize > 0 {
+		opts.writeQueueSize = writeQueueSize
+	} else {
+		opts.writeQueueSize = defaultServerWriteQueueSize
+	}
+
+	if heartbeatInterval := etc.Get(defaultServerHeartbeatIntervalKey, defaultServerHeartbeatInterval).Duration(); heartbeatInterval >= 0 {
+		opts.heartbeatInterval = heartbeatInterval
+	} else {
+		opts.heartbeatInterval = xconv.Duration(defaultServerHeartbeatInterval)
+	}
+
+	switch heartbeatMechanism := HeartbeatMechanism(etc.Get(defaultServerHeartbeatMechanismKey, defaultServerHeartbeatMechanism).String()); heartbeatMechanism {
+	case RespHeartbeat, TickHeartbeat:
+		opts.heartbeatMechanism = heartbeatMechanism
+	default:
+		opts.heartbeatMechanism = defaultServerHeartbeatMechanism
+	}
+
+	if authorizeTimeout := etc.Get(defaultServerAuthorizeTimeoutKey, defaultServerAuthorizeTimeout).Duration(); authorizeTimeout >= 0 {
+		opts.authorizeTimeout = authorizeTimeout
+	} else {
+		opts.authorizeTimeout = xconv.Duration(defaultServerAuthorizeTimeout)
+	}
+
+	if closeTimeout := etc.Get(defaultServerCloseTimeoutKey, defaultServerCloseTimeout).Duration(); closeTimeout >= 0 {
+		opts.closeTimeout = closeTimeout
+	} else {
+		opts.closeTimeout = xconv.Duration(defaultServerCloseTimeout)
+	}
+
+	return opts
+}
+
+// WithServerAddr 设置监听地址
+// @param addr string 监听地址
+// @return @1 ServerOption 服务器配置项
+func WithServerAddr(addr string) ServerOption {
+	return func(o *serverOptions) {
+		if addr != "" {
+			o.addr = addr
+		} else {
+			log.Warnf("the specified addr is empty and will be ignored")
+		}
+	}
+}
+
+// WithServerCredentials 设置服务器证书和秘钥
+// @param certFile string 证书文件
+// @param keyFile string 秘钥文件
+// @return @1 ServerOption 服务器配置项
+func WithServerCredentials(certFile, keyFile string) ServerOption {
+	return func(o *serverOptions) {
+		if certFile != "" && keyFile != "" {
+			o.certFile, o.keyFile = certFile, keyFile
+		} else {
+			log.Warnf("the specified certFile or keyFile is empty and will be ignored")
+		}
+	}
+}
+
+// WithServerMaxConnNum 设置连接的最大连接数
+// @param maxConnNum int 最大连接数
+// @return @1 ServerOption 服务器配置项
+func WithServerMaxConnNum(maxConnNum int) ServerOption {
+	return func(o *serverOptions) {
+		if maxConnNum > 0 {
+			o.maxConnNum = maxConnNum
+		} else {
+			log.Warnf("the specified maxConnNum is less than zero and will be ignored")
+		}
+	}
+}
+
+// WithServerReadBufferSize 设置读取缓冲区大小
+// @param readBufferSize int 读取缓冲区大小
+// @return @1 ServerOption 服务器配置项
+func WithServerReadBufferSize(readBufferSize int) ServerOption {
+	return func(o *serverOptions) {
+		if readBufferSize > 0 {
+			o.readBufferSize = readBufferSize
+		} else {
+			log.Warnf("the specified readBufferSize is less than zero and will be ignored")
+		}
+	}
+}
+
+// WithServerWriteTimeout 设置写超时时间
+// @param writeTimeout time.Duration 写超时时间
+// @return @1 ServerOption 服务器配置项
+func WithServerWriteTimeout(writeTimeout time.Duration) ServerOption {
+	return func(o *serverOptions) {
+		if writeTimeout >= 0 {
+			o.writeTimeout = writeTimeout
+		} else {
+			log.Warnf("the specified writeTimeout is less than zero and will be ignored")
+		}
+	}
+}
+
+// WithServerWriteQueueSize 设置写入队列大小
+// @param writeQueueSize int 写入队列大小
+// @return @1 ServerOption 服务器配置项
+func WithServerWriteQueueSize(writeQueueSize int) ServerOption {
+	return func(o *serverOptions) {
+		if writeQueueSize > 0 {
+			o.writeQueueSize = writeQueueSize
+		} else {
+			log.Warnf("the specified writeQueueSize is less than zero and will be ignored")
+		}
+	}
+}
+
+// WithServerHeartbeatInterval 设置心跳检测间隔时间
+// @param heartbeatInterval time.Duration 心跳间隔时间
+// @return @1 ServerOption 服务器配置项
+func WithServerHeartbeatInterval(heartbeatInterval time.Duration) ServerOption {
+	return func(o *serverOptions) {
+		if heartbeatInterval >= 0 {
+			o.heartbeatInterval = heartbeatInterval
+		} else {
+			log.Warnf("the specified heartbeatInterval is less than zero and will be ignored")
+		}
+	}
+}
+
+// WithServerHeartbeatMechanism 设置心跳机制
+// @param heartbeatMechanism HeartbeatMechanism 心跳机制
+// @return @1 ServerOption 服务器配置项
+func WithServerHeartbeatMechanism(heartbeatMechanism HeartbeatMechanism) ServerOption {
+	return func(o *serverOptions) {
+		if heartbeatMechanism == RespHeartbeat || heartbeatMechanism == TickHeartbeat {
+			o.heartbeatMechanism = heartbeatMechanism
+		} else {
+			log.Warnf("the specified heartbeatMechanism is %v and will be ignored", heartbeatMechanism)
+		}
+	}
+}
+
+// WithServerAuthorizeTimeout 设置授权超时时间
+// @param authorizeTimeout time.Duration 授权超时时间
+// @return @1 ServerOption 服务器配置项
+func WithServerAuthorizeTimeout(authorizeTimeout time.Duration) ServerOption {
+	return func(o *serverOptions) {
+		if authorizeTimeout >= 0 {
+			o.authorizeTimeout = authorizeTimeout
+		} else {
+			log.Warnf("the specified authorizeTimeout is less than zero and will be ignored")
+		}
+	}
+}
+
+// WithServerCloseTimeout 设置优雅关闭超时时间
+// 超时后未排空的写队列将放弃等待并强制关闭连接，默认为0表示不限制
+// @param closeTimeout time.Duration 优雅关闭超时时间
+// @return @1 ServerOption 服务器配置项
+func WithServerCloseTimeout(closeTimeout time.Duration) ServerOption {
+	return func(o *serverOptions) {
+		if closeTimeout >= 0 {
+			o.closeTimeout = closeTimeout
+		} else {
+			log.Warnf("the specified closeTimeout is less than zero and will be ignored")
+		}
+	}
+}
+
+// WithServerEnableProxyProtocol 设置是否启用ProxyProtocol
+// @param enableProxyProtocol bool 是否启用ProxyProtocol
+// @return @1 ServerOption 服务器配置项
+func WithServerEnableProxyProtocol(enableProxyProtocol bool) ServerOption {
+	return func(o *serverOptions) { o.enableProxyProtocol = enableProxyProtocol }
+}
